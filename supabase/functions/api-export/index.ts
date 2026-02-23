@@ -180,7 +180,7 @@ Deno.serve(async (req) => {
     if (permissions?.read_quality) {
       const q = supabaseAdmin
         .from("quality_incidents")
-        .select("id, incident_type, incident_date, status, description, action_taken, driver_id, vehicle_id, source, driver:drivers(driver_number, full_name), vehicle:vehicles(vehicle_number, registration_number)");
+        .select("id, incident_type, incident_date, status, description, action_taken, driver_id, vehicle_id, source, driver:drivers(driver_number, full_name), vehicle:vehicles(vehicle_number, registration_number, company_id, company:companies(name))");
       const { data, error } = await q;
       if (error) throw error;
       result.quality_incidents = (data || []).map((qi: any) => ({
@@ -189,6 +189,8 @@ Deno.serve(async (req) => {
         driver_name: qi.driver?.full_name || null,
         vehicle_number: qi.vehicle?.vehicle_number || null,
         vehicle_registration: qi.vehicle?.registration_number || null,
+        company_id: qi.vehicle?.company_id || null,
+        company_name: qi.vehicle?.company?.name || null,
         driver: undefined,
         vehicle: undefined,
       }));
