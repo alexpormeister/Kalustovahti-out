@@ -117,7 +117,7 @@ export default function UserManagement() {
   const [resetPasswordUserId, setResetPasswordUserId] = useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
 
-  // Fetch available roles
+  // Fetch available roles from the roles table
   const { data: dbRoles = [] } = useQuery({
     queryKey: ["available-roles"],
     queryFn: async () => {
@@ -138,7 +138,7 @@ export default function UserManagement() {
     roleColors[r.name] = systemRoleColors[r.name] || "bg-secondary text-secondary-foreground";
   });
 
-  // KORJATTU: Haetaan sähköpostit suoraan profiles-taulusta (vaatii että sarake on olemassa)
+  // PÄIVITETTY: Haetaan sähköpostit suoraan profiles-taulusta (ei Edge-funktiota)
   const { data: emailMap = {} } = useQuery({
     queryKey: ["admin-user-emails"],
     queryFn: async () => {
@@ -147,7 +147,7 @@ export default function UserManagement() {
         .select("id, email");
       
       if (error) {
-        console.warn("Could not fetch emails directly, might be missing email column");
+        console.error("Error fetching emails:", error);
         return {};
       }
       
@@ -157,7 +157,7 @@ export default function UserManagement() {
     },
   });
 
-  // Fetch all users
+  // Fetch all users with their roles
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["admin-users", emailMap],
     queryFn: async () => {
@@ -236,50 +236,66 @@ export default function UserManagement() {
     onError: () => toast.error("Virhe päivitettäessä käyttäjää"),
   });
 
-  // HUOM: Create, Reset Password ja Delete vaativat joko Edge Functionin 
-  // tai koodin muuttamisen käyttämään suoraan supabase.auth.admin API:a (vaatii service_role avaimen)
+  // PÄIVITETTY: Käyttäjän luonti ilman Edge-funktiota
   const createUserMutation = useMutation({
     mutationFn: async (data: typeof newUserData) => {
-      // TÄSSÄ: Jos funktiota ei ole, tämä epäonnistuu. Suositeltu tapa on antaa Lovablen 
-      // vaihtaa tämä suoraan auth.signUp kutsuun jos service rolea ei ole käytössä.
-      const { data: result, error } = await supabase.functions.invoke("admin-create-user", {
-        body: data,
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: data.email,
+        password: data.password,
+        options: {
+          data: {
+            full_name: data.full_name,
+          }
+        }
       });
-      if (error) throw error;
-      return result;
+      
+      if (authError) throw authError;
+      if (!authData.user) throw new Error("Luonti epäonnistui");
+
+      const { error: roleError } = await supabase
+        .from("user_roles")
+        .insert([{ user_id: authData.user.id, role: data.role }]);
+
+      if (roleError) throw roleError;
+      return authData;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success("Käyttäjä luotu!");
+      toast.success("Käyttäjä luotu! Hän voi nyt vahvistaa sähköpostinsa.");
       setIsAddUserDialogOpen(false);
+      setNewUserData({ email: "", password: "", full_name: "", role: "support" });
     },
-    onError: (error: any) => toast.error("Virhe: " + error.message),
+    onError: (error: any) => toast.error("Virhe luotaessa käyttäjää: " + error.message),
   });
 
+  // PÄIVITETTY: Salasanan vaihto (Admin API:n puuttuessa tämä vaatii huomiota)
   const resetPasswordMutation = useMutation({
     mutationFn: async ({ userId, newPassword }: { userId: string; newPassword: string }) => {
-      const { data, error } = await supabase.functions.invoke("admin-reset-password", {
-        body: { user_id: userId, new_password: newPassword },
-      });
+      // Huom: Ilman Edge-funktiota admin ei voi vaihtaa muiden salasanoja suoraan selaimesta 
+      // ilman Service Role -avainta. Tämä lähettää nyt palautuslinkin sähköpostiin.
+      const { error } = await supabase.auth.resetPasswordForEmail(emailMap[userId]);
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Salasana vaihdettu");
+      toast.success("Salasanan palautuslinkki lähetetty sähköpostiin");
       setResetPasswordUserId(null);
     },
     onError: (error: any) => toast.error("Virhe: " + error.message),
   });
 
+  // PÄIVITETTY: Käyttäjän poisto (Poistaa vain profiilin, jos Edge-funktiota ei ole)
   const deleteUserMutation = useMutation({
     mutationFn: async (userId: string) => {
-      const { error } = await supabase.functions.invoke("admin-delete-user", {
-        body: { user_id: userId },
-      });
+      const { error } = await supabase
+        .from("profiles")
+        .delete()
+        .eq("id", userId);
+
       if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success("Käyttäjä poistettu");
+      toast.success("Käyttäjäprofiili poistettu");
     },
     onError: () => toast.error("Virhe poistettaessa"),
   });
@@ -381,7 +397,7 @@ export default function UserManagement() {
                             {canEdit && (
                               <>
                                 <Button variant="ghost" size="icon" onClick={() => handleEdit(user)}><Edit2 className="h-4 w-4" /></Button>
-                                <Button variant="ghost" size="icon" onClick={() => { setResetPasswordUserId(user.id); setResetPasswordValue(""); }}><KeyRound className="h-4 w-4" /></Button>
+                                <Button variant="ghost" size="icon" onClick={() => { setResetPasswordUserId(user.id); setResetPasswordValue(""); }} title="Lähetä palautuslinkki"><KeyRound className="h-4 w-4" /></Button>
                                 <AlertDialog>
                                   <AlertDialogTrigger asChild><Button variant="ghost" size="icon"><Trash2 className="h-4 w-4 text-destructive" /></Button></AlertDialogTrigger>
                                   <AlertDialogContent>
@@ -418,7 +434,6 @@ export default function UserManagement() {
           </Card>
         </div>
 
-        {/* Edit & Reset Dialogit (Samat kuin aiemmin mutta optimoidut) */}
         <Dialog open={!!selectedUser} onOpenChange={(o) => !o && setSelectedUser(null)}>
           <DialogContent>
             <DialogHeader><DialogTitle>Muokkaa käyttäjää</DialogTitle></DialogHeader>
@@ -432,16 +447,6 @@ export default function UserManagement() {
                 </Select>
               </div>
               <Button type="submit" className="w-full">Tallenna</Button>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={!!resetPasswordUserId} onOpenChange={(o) => !o && setResetPasswordUserId(null)}>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Vaihda salasana</DialogTitle></DialogHeader>
-            <form onSubmit={(e) => { e.preventDefault(); resetPasswordMutation.mutate({ userId: resetPasswordUserId!, newPassword: resetPasswordValue }); }} className="space-y-4">
-              <Input type="password" value={resetPasswordValue} onChange={(e) => setResetPasswordValue(e.target.value)} placeholder="Uusi salasana" required />
-              <Button type="submit" className="w-full">Päivitä salasana</Button>
             </form>
           </DialogContent>
         </Dialog>
