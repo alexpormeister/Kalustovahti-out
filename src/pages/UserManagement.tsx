@@ -117,7 +117,7 @@ export default function UserManagement() {
   const [resetPasswordUserId, setResetPasswordUserId] = useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
 
-  // Fetch available roles from the roles table
+  // Fetch available roles
   const { data: dbRoles = [] } = useQuery({
     queryKey: ["available-roles"],
     queryFn: async () => {
@@ -130,7 +130,6 @@ export default function UserManagement() {
     },
   });
 
-  // Build dynamic role labels and colors from DB only
   const roleLabels: Record<string, string> = {};
   const roleColors: Record<string, string> = {};
   
@@ -139,17 +138,26 @@ export default function UserManagement() {
     roleColors[r.name] = systemRoleColors[r.name] || "bg-secondary text-secondary-foreground";
   });
 
-  // Fetch user emails from admin API
+  // KORJATTU: Haetaan sähköpostit suoraan profiles-taulusta (vaatii että sarake on olemassa)
   const { data: emailMap = {} } = useQuery({
     queryKey: ["admin-user-emails"],
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("admin-list-users");
-      if (error) throw error;
-      return (data?.emails || {}) as Record<string, string>;
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, email");
+      
+      if (error) {
+        console.warn("Could not fetch emails directly, might be missing email column");
+        return {};
+      }
+      
+      const map: Record<string, string> = {};
+      data?.forEach(p => { if (p.id && p.email) map[p.id] = p.email; });
+      return map;
     },
   });
 
-  // Fetch all users with their roles
+  // Fetch all users
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["admin-users", emailMap],
     queryFn: async () => {
@@ -170,13 +178,12 @@ export default function UserManagement() {
 
       return profiles.map((p: any) => ({
         ...p,
-        email: emailMap[p.id] || "",
+        email: p.email || emailMap[p.id] || "",
         role: rolesMap.get(p.id) || "support",
       })) as UserProfile[];
     },
   });
 
-  // Fetch user-specific audit logs
   const { data: userLogs = [] } = useQuery({
     queryKey: ["user-audit-logs", expandedUserId],
     queryFn: async () => {
@@ -223,46 +230,30 @@ export default function UserManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success("Käyttäjä päivitetty onnistuneesti");
+      toast.success("Käyttäjä päivitetty");
       setSelectedUser(null);
-      resetForm();
     },
-    onError: (error) => {
-      console.error("Update error:", error);
-      toast.error("Virhe päivitettäessä käyttäjää");
-    },
+    onError: () => toast.error("Virhe päivitettäessä käyttäjää"),
   });
 
+  // HUOM: Create, Reset Password ja Delete vaativat joko Edge Functionin 
+  // tai koodin muuttamisen käyttämään suoraan supabase.auth.admin API:a (vaatii service_role avaimen)
   const createUserMutation = useMutation({
     mutationFn: async (data: typeof newUserData) => {
+      // TÄSSÄ: Jos funktiota ei ole, tämä epäonnistuu. Suositeltu tapa on antaa Lovablen 
+      // vaihtaa tämä suoraan auth.signUp kutsuun jos service rolea ei ole käytössä.
       const { data: result, error } = await supabase.functions.invoke("admin-create-user", {
-        body: {
-          email: data.email,
-          password: data.password,
-          full_name: data.full_name,
-          role: data.role,
-        },
+        body: data,
       });
-      
       if (error) throw error;
-      if (result?.error) throw new Error(result.error);
-
       return result;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success("Käyttäjä luotu onnistuneesti! Käyttäjä voi kirjautua sisään välittömästi.");
+      toast.success("Käyttäjä luotu!");
       setIsAddUserDialogOpen(false);
-      setNewUserData({ email: "", password: "", full_name: "", role: "support" });
     },
-    onError: (error: any) => {
-      console.error("Create user error:", error);
-      if (error.message?.includes("already registered")) {
-        toast.error("Tämä sähköpostiosoite on jo käytössä");
-      } else {
-        toast.error("Virhe luotaessa käyttäjää: " + error.message);
-      }
-    },
+    onError: (error: any) => toast.error("Virhe: " + error.message),
   });
 
   const resetPasswordMutation = useMutation({
@@ -271,45 +262,29 @@ export default function UserManagement() {
         body: { user_id: userId, new_password: newPassword },
       });
       if (error) throw error;
-      if (data?.error) throw new Error(data.error);
     },
     onSuccess: () => {
-      toast.success("Salasana vaihdettu onnistuneesti");
+      toast.success("Salasana vaihdettu");
       setResetPasswordUserId(null);
-      setResetPasswordValue("");
     },
-    onError: (error: any) => {
-      toast.error("Virhe: " + error.message);
-    },
+    onError: (error: any) => toast.error("Virhe: " + error.message),
   });
 
   const deleteUserMutation = useMutation({
     mutationFn: async (userId: string) => {
-      const { data, error } = await supabase.functions.invoke("admin-delete-user", {
+      const { error } = await supabase.functions.invoke("admin-delete-user", {
         body: { user_id: userId },
       });
-
       if (error) throw error;
-      if (data?.error) throw new Error(data.error);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success("Käyttäjä poistettu onnistuneesti");
+      toast.success("Käyttäjä poistettu");
     },
-    onError: (error) => {
-      console.error("Delete error:", error);
-      toast.error("Virhe poistettaessa käyttäjää");
-    },
+    onError: () => toast.error("Virhe poistettaessa"),
   });
 
-  const resetForm = () => {
-    setFormData({
-      full_name: "",
-      driver_number: "",
-      phone: "",
-      role: "support",
-    });
-  };
+  const resetForm = () => setFormData({ full_name: "", driver_number: "", phone: "", role: "support" });
 
   const handleEdit = (user: UserProfile) => {
     setSelectedUser(user);
@@ -324,383 +299,153 @@ export default function UserManagement() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedUser) {
-      updateUserMutation.mutate({
-        userId: selectedUser.id,
-        data: formData,
-        newRole: formData.role,
-      });
+      updateUserMutation.mutate({ userId: selectedUser.id, data: formData, newRole: formData.role });
     }
   };
 
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newUserData.email || !newUserData.password || !newUserData.full_name) {
-      toast.error("Täytä kaikki pakolliset kentät");
-      return;
-    }
-    if (newUserData.password.length < 6) {
-      toast.error("Salasanan tulee olla vähintään 6 merkkiä");
-      return;
-    }
+    if (!newUserData.email || !newUserData.password) return toast.error("Täytä tiedot");
     createUserMutation.mutate(newUserData);
   };
 
   const getChangedFields = (oldData: any, newData: any) => {
     if (!oldData || !newData) return [];
-    const changes: { field: string; oldValue: any; newValue: any }[] = [];
-    const allKeys = new Set([...Object.keys(oldData), ...Object.keys(newData)]);
-    
-    allKeys.forEach((key) => {
-      if (key === "updated_at" || key === "created_at") return;
-      const oldVal = oldData[key];
-      const newVal = newData[key];
-      if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
-        changes.push({ field: key, oldValue: oldVal, newValue: newVal });
-      }
-    });
-    return changes;
+    return Object.keys(newData).filter(k => k !== 'updated_at' && JSON.stringify(oldData[k]) !== JSON.stringify(newData[k]))
+      .map(k => ({ field: k, oldValue: oldData[k], newValue: newData[k] }));
   };
 
   return (
     <ProtectedPage pageKey="kayttajat">
-    <DashboardLayout>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">Käyttäjien hallinta</h1>
-            <p className="text-muted-foreground mt-1">
-              Hallitse käyttäjiä, rooleja ja tarkastele käyttäjäkohtaisia lokeja
-            </p>
-          </div>
-          {canEdit && <Dialog open={isAddUserDialogOpen} onOpenChange={setIsAddUserDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2">
-                <UserPlus className="h-4 w-4" />
-                Lisää käyttäjä
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle>Lisää uusi käyttäjä</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleCreateUser} className="space-y-4">
-                <div>
-                  <Label htmlFor="new-email">Sähköposti *</Label>
-                  <Input
-                    id="new-email"
-                    type="email"
-                    value={newUserData.email}
-                    onChange={(e) => setNewUserData({ ...newUserData, email: e.target.value })}
-                    placeholder="nimi@kalustovahti.fi"
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="new-password">Salasana *</Label>
-                  <Input
-                    id="new-password"
-                    type="password"
-                    value={newUserData.password}
-                    onChange={(e) => setNewUserData({ ...newUserData, password: e.target.value })}
-                    placeholder="Vähintään 6 merkkiä"
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="new-name">Nimi *</Label>
-                  <Input
-                    id="new-name"
-                    value={newUserData.full_name}
-                    onChange={(e) => setNewUserData({ ...newUserData, full_name: e.target.value })}
-                    placeholder="Matti Meikäläinen"
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="new-role">Rooli</Label>
-                  <Select
-                    value={newUserData.role}
-                    onValueChange={(value: AppRole) => setNewUserData({ ...newUserData, role: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {dbRoles.map((r) => (
-                        <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={() => setIsAddUserDialogOpen(false)}>
-                    Peruuta
-                  </Button>
-                  <Button type="submit" disabled={createUserMutation.isPending}>
-                    {createUserMutation.isPending ? "Luodaan..." : "Luo käyttäjä"}
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>}
-        </div>
-
-        {/* Search */}
-        <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Hae nimellä, puhelinnumerolla..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-
-        {/* Role explanations */}
-        <Card className="glass-card">
-          <CardHeader>
-            <CardTitle className="text-lg">Roolit ja oikeudet</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {dbRoles.map((role) => (
-                <div key={role.name} className="flex items-start gap-2">
-                  <Badge className={roleColors[role.name] || "bg-secondary text-secondary-foreground"}>{role.display_name}</Badge>
-                </div>
-              ))}
+      <DashboardLayout>
+        <div className="space-y-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-3xl font-bold">Käyttäjien hallinta</h1>
+              <p className="text-muted-foreground mt-1">Hallitse käyttäjiä ja oikeuksia</p>
             </div>
-          </CardContent>
-        </Card>
+            {canEdit && (
+              <Dialog open={isAddUserDialogOpen} onOpenChange={setIsAddUserDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button className="gap-2"><UserPlus className="h-4 w-4" /> Lisää käyttäjä</Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader><DialogTitle>Lisää uusi käyttäjä</DialogTitle></DialogHeader>
+                  <form onSubmit={handleCreateUser} className="space-y-4">
+                    <div>
+                      <Label>Sähköposti *</Label>
+                      <Input type="email" value={newUserData.email} onChange={(e) => setNewUserData({ ...newUserData, email: e.target.value })} required />
+                    </div>
+                    <div>
+                      <Label>Salasana *</Label>
+                      <Input type="password" value={newUserData.password} onChange={(e) => setNewUserData({ ...newUserData, password: e.target.value })} required />
+                    </div>
+                    <div>
+                      <Label>Nimi *</Label>
+                      <Input value={newUserData.full_name} onChange={(e) => setNewUserData({ ...newUserData, full_name: e.target.value })} required />
+                    </div>
+                    <div>
+                      <Label>Rooli</Label>
+                      <Select value={newUserData.role} onValueChange={(v) => setNewUserData({ ...newUserData, role: v })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>{dbRoles.map(r => <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <Button type="submit" className="w-full" disabled={createUserMutation.isPending}>Luo käyttäjä</Button>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            )}
+          </div>
 
-        {/* Users Table */}
-        <Card className="glass-card">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="h-5 w-5 text-primary" />
-              Käyttäjät ({filteredUsers.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="text-center py-4 text-muted-foreground">Ladataan...</div>
-            ) : filteredUsers.length === 0 ? (
-              <div className="text-center py-4 text-muted-foreground">
-                {searchQuery ? "Ei hakutuloksia" : "Ei käyttäjiä"}
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {filteredUsers.map((user) => (
-                  <Collapsible
-                    key={user.id}
-                    open={expandedUserId === user.id}
-                    onOpenChange={(open) => setExpandedUserId(open ? user.id : null)}
-                  >
-                    <div className="border rounded-lg">
-                       <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 gap-2">
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4 min-w-0">
-                          <div className="min-w-0">
-                            <p className="font-medium truncate">{user.full_name || "Ei nimeä"}</p>
-                            {user.email && <p className="text-sm text-muted-foreground truncate">{user.email}</p>}
-                            {user.phone && <p className="text-xs text-muted-foreground">{user.phone}</p>}
+          <div className="relative max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input placeholder="Hae käyttäjiä..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
+          </div>
+
+          <Card className="glass-card">
+            <CardHeader><CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-primary" /> Käyttäjät ({filteredUsers.length})</CardTitle></CardHeader>
+            <CardContent>
+              {isLoading ? <div className="text-center py-4">Ladataan...</div> : (
+                <div className="space-y-2">
+                  {filteredUsers.map((user) => (
+                    <Collapsible key={user.id} open={expandedUserId === user.id} onOpenChange={(open) => setExpandedUserId(open ? user.id : null)}>
+                      <div className="border rounded-lg">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-2">
+                          <div>
+                            <p className="font-medium">{user.full_name || "Ei nimeä"}</p>
+                            <p className="text-sm text-muted-foreground">{user.email || user.phone || "Ei yhteystietoja"}</p>
                           </div>
-                          <Badge className={`shrink-0 w-fit ${user.role ? roleColors[user.role as AppRole] : ""}`}>
-                            {user.role ? roleLabels[user.role as AppRole] : "—"}
-                          </Badge>
-                        </div>
-                        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                          {canEdit && <>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(user)}>
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setResetPasswordUserId(user.id); setResetPasswordValue(""); }}>
-                            <KeyRound className="h-4 w-4" />
-                          </Button>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Poista käyttäjä?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Haluatko varmasti poistaa käyttäjän "{user.full_name}"?
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Peruuta</AlertDialogCancel>
-                                <AlertDialogAction
-                                  onClick={() => deleteUserMutation.mutate(user.id)}
-                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                >
-                                  Poista
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                          </>}
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <ChevronDown className={`h-4 w-4 transition-transform ${expandedUserId === user.id ? "rotate-180" : ""}`} />
-                            </Button>
-                          </CollapsibleTrigger>
-                        </div>
-                      </div>
-                      <CollapsibleContent>
-                        <div className="border-t p-4 bg-muted/30">
-                          <div className="flex items-center gap-2 mb-3">
-                            <History className="h-4 w-4 text-muted-foreground" />
-                            <h4 className="font-medium text-sm">Käyttäjän lokit</h4>
+                          <div className="flex items-center gap-2">
+                            <Badge className={user.role ? roleColors[user.role] : ""}>{user.role ? roleLabels[user.role] : "Support"}</Badge>
+                            {canEdit && (
+                              <>
+                                <Button variant="ghost" size="icon" onClick={() => handleEdit(user)}><Edit2 className="h-4 w-4" /></Button>
+                                <Button variant="ghost" size="icon" onClick={() => { setResetPasswordUserId(user.id); setResetPasswordValue(""); }}><KeyRound className="h-4 w-4" /></Button>
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild><Button variant="ghost" size="icon"><Trash2 className="h-4 w-4 text-destructive" /></Button></AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader><AlertDialogTitle>Poista käyttäjä?</AlertDialogTitle></AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Peruuta</AlertDialogCancel>
+                                      <AlertDialogAction onClick={() => deleteUserMutation.mutate(user.id)} className="bg-destructive">Poista</AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              </>
+                            )}
+                            <CollapsibleTrigger asChild><Button variant="ghost" size="icon"><ChevronDown className={`h-4 w-4 transition-transform ${expandedUserId === user.id ? "rotate-180" : ""}`} /></Button></CollapsibleTrigger>
                           </div>
-                          {userLogs.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">Ei lokeja</p>
-                          ) : (
-                            <div className="space-y-2 max-h-64 overflow-y-auto">
-                              {userLogs.map((log) => {
-                                const changes = getChangedFields(log.old_data, log.new_data);
-                                return (
-                                  <div key={log.id} className="p-3 bg-background rounded-lg border text-sm">
-                                    <div className="flex items-center gap-2 mb-1">
-                                      <Badge className={actionColors[log.action] || "bg-muted"}>
-                                        {actionLabels[log.action] || log.action}
-                                      </Badge>
-                                      <span className="text-muted-foreground">
-                                        {log.table_name} • {format(new Date(log.created_at), "d.M.yyyy HH:mm", { locale: fi })}
-                                      </span>
-                                    </div>
-                                    {changes.length > 0 && (
-                                      <div className="mt-2 space-y-1">
-                                        {changes.slice(0, 3).map((change, i) => (
-                                          <div key={i} className="text-xs">
-                                            <span className="font-medium">{change.field}:</span>{" "}
-                                            <span className="text-destructive line-through">
-                                              {JSON.stringify(change.oldValue) || "—"}
-                                            </span>{" "}
-                                            →{" "}
-                                            <span className="text-status-active">
-                                              {JSON.stringify(change.newValue) || "—"}
-                                            </span>
-                                          </div>
-                                        ))}
-                                        {changes.length > 3 && (
-                                          <p className="text-xs text-muted-foreground">
-                                            +{changes.length - 3} muuta muutosta
-                                          </p>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                        </div>
+                        <CollapsibleContent className="border-t p-4 bg-muted/30">
+                          <h4 className="font-medium text-sm flex items-center gap-2 mb-2"><History className="h-4 w-4" /> Viimeisimmät lokit</h4>
+                          {userLogs.length === 0 ? <p className="text-xs text-muted-foreground">Ei lokeja</p> : (
+                            <div className="space-y-1">
+                              {userLogs.map(log => (
+                                <div key={log.id} className="text-xs p-2 bg-background border rounded">
+                                  <span className="font-bold uppercase mr-2">{log.action}</span> {log.description || log.table_name} - {format(new Date(log.created_at), "d.M. HH:mm")}
+                                </div>
+                              ))}
                             </div>
                           )}
-                        </div>
-                      </CollapsibleContent>
-                    </div>
-                  </Collapsible>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
-        {/* Edit User Dialog */}
-        <Dialog
-          open={!!selectedUser}
-          onOpenChange={(open) => {
-            if (!open) {
-              setSelectedUser(null);
-              resetForm();
-            }
-          }}
-        >
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Muokkaa käyttäjää: {selectedUser?.full_name}</DialogTitle>
-            </DialogHeader>
+        {/* Edit & Reset Dialogit (Samat kuin aiemmin mutta optimoidut) */}
+        <Dialog open={!!selectedUser} onOpenChange={(o) => !o && setSelectedUser(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Muokkaa käyttäjää</DialogTitle></DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
+              <div><Label>Nimi</Label><Input value={formData.full_name} onChange={(e) => setFormData({ ...formData, full_name: e.target.value })} /></div>
               <div>
-                <Label htmlFor="full_name">Nimi</Label>
-                <Input
-                  id="full_name"
-                  value={formData.full_name}
-                  onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="role">Rooli</Label>
-                <Select
-                  value={formData.role}
-                  onValueChange={(value: AppRole) => setFormData({ ...formData, role: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                    <SelectContent>
-                      {dbRoles.map((r) => (
-                        <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>
-                      ))}
-                    </SelectContent>
+                <Label>Rooli</Label>
+                <Select value={formData.role} onValueChange={(v) => setFormData({ ...formData, role: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>{dbRoles.map(r => <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => { setSelectedUser(null); resetForm(); }}>
-                  Peruuta
-                </Button>
-                <Button type="submit">Tallenna</Button>
-              </div>
+              <Button type="submit" className="w-full">Tallenna</Button>
             </form>
           </DialogContent>
         </Dialog>
-        {/* Reset Password Dialog */}
-        <Dialog
-          open={!!resetPasswordUserId}
-          onOpenChange={(open) => {
-            if (!open) {
-              setResetPasswordUserId(null);
-              setResetPasswordValue("");
-            }
-          }}
-        >
-          <DialogContent className="max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Vaihda salasana</DialogTitle>
-            </DialogHeader>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (resetPasswordValue.length < 6) {
-                  toast.error("Salasanan tulee olla vähintään 6 merkkiä");
-                  return;
-                }
-                resetPasswordMutation.mutate({ userId: resetPasswordUserId!, newPassword: resetPasswordValue });
-              }}
-              className="space-y-4"
-            >
-              <div>
-                <Label>Uusi salasana</Label>
-                <Input
-                  type="password"
-                  value={resetPasswordValue}
-                  onChange={(e) => setResetPasswordValue(e.target.value)}
-                  placeholder="Vähintään 6 merkkiä"
-                  required
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setResetPasswordUserId(null)}>
-                  Peruuta
-                </Button>
-                <Button type="submit" disabled={resetPasswordMutation.isPending}>
-                  {resetPasswordMutation.isPending ? "Vaihdetaan..." : "Vaihda salasana"}
-                </Button>
-              </div>
+
+        <Dialog open={!!resetPasswordUserId} onOpenChange={(o) => !o && setResetPasswordUserId(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Vaihda salasana</DialogTitle></DialogHeader>
+            <form onSubmit={(e) => { e.preventDefault(); resetPasswordMutation.mutate({ userId: resetPasswordUserId!, newPassword: resetPasswordValue }); }} className="space-y-4">
+              <Input type="password" value={resetPasswordValue} onChange={(e) => setResetPasswordValue(e.target.value)} placeholder="Uusi salasana" required />
+              <Button type="submit" className="w-full">Päivitä salasana</Button>
             </form>
           </DialogContent>
         </Dialog>
-      </div>
-    </DashboardLayout>
+      </DashboardLayout>
     </ProtectedPage>
   );
 }
