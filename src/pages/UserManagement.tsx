@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,25 +67,6 @@ interface AuditLog {
   created_at: string;
 }
 
-const systemRoleColors: Record<string, string> = {
-  system_admin: "bg-destructive text-destructive-foreground",
-  contract_manager: "bg-primary text-primary-foreground",
-  hardware_ops: "bg-status-maintenance text-status-maintenance-foreground",
-  support: "bg-muted text-muted-foreground",
-};
-
-const actionLabels: Record<string, string> = {
-  create: "Luonti",
-  update: "Muokkaus",
-  delete: "Poisto",
-};
-
-const actionColors: Record<string, string> = {
-  create: "bg-status-active text-status-active-foreground",
-  update: "bg-primary text-primary-foreground",
-  delete: "bg-destructive text-destructive-foreground",
-};
-
 export default function UserManagement() {
   const queryClient = useQueryClient();
   const { isSystemAdmin } = usePermissions();
@@ -99,41 +80,49 @@ export default function UserManagement() {
     full_name: "",
     driver_number: "",
     phone: "",
-    role: "support" as AppRole,
+    role: "" as AppRole,
   });
 
   const [newUserData, setNewUserData] = useState({
     email: "",
     password: "",
     full_name: "",
-    role: "support" as AppRole,
+    role: "" as AppRole,
   });
 
   const [resetPasswordUserId, setResetPasswordUserId] = useState<string | null>(null);
   const [resetPasswordValue, setResetPasswordValue] = useState("");
 
-  // 1. Haetaan roolit
+  // 1. Haetaan roolit dynaamisesti tietokannasta
   const { data: dbRoles = [] } = useQuery({
     queryKey: ["available-roles"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("roles").select("name, display_name").order("display_name");
+      const { data, error } = await supabase
+        .from("roles")
+        .select("name, display_name")
+        .order("display_name");
       if (error) throw error;
       return data || [];
     },
   });
 
-  const roleLabels: Record<string, string> = {};
-  const roleColors: Record<string, string> = {};
-  dbRoles.forEach((r) => {
-    roleLabels[r.name] = r.display_name;
-    roleColors[r.name] = systemRoleColors[r.name] || "bg-secondary text-secondary-foreground";
-  });
+  // Funktio dynaamiselle värille
+  const getRoleColor = (roleName: string) => {
+    const colors: Record<string, string> = {
+      system_admin: "bg-destructive text-destructive-foreground",
+      support: "bg-muted text-muted-foreground",
+    };
+    return colors[roleName] || "bg-primary text-primary-foreground";
+  };
 
-  // 2. Sähköpostit
+  // 2. Haetaan sähköpostit suoraan profiles-taulusta
   const { data: emailMap = {} } = useQuery({
     queryKey: ["admin-user-emails"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("profiles").select("id, email");
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, email");
+      
       if (error) return {};
       const map: Record<string, string> = {};
       (data as any[]).forEach(p => { if (p.id && p.email) map[p.id] = p.email; });
@@ -141,14 +130,16 @@ export default function UserManagement() {
     },
   });
 
-  // 3. Käyttäjälista
+  // 3. Haetaan käyttäjälista
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["admin-users", emailMap],
     queryFn: async () => {
       const { data: profiles, error: pError } = await supabase.from("profiles").select("*").order("full_name");
       if (pError) throw pError;
+      
       const { data: roles, error: rError } = await supabase.from("user_roles").select("user_id, role");
       if (rError) throw rError;
+      
       const rolesMap = new Map(roles?.map((r: any) => [r.user_id, r.role]));
       return profiles.map((p: any) => ({
         ...p,
@@ -169,49 +160,40 @@ export default function UserManagement() {
     enabled: !!expandedUserId,
   });
 
-  // Toiminnot
   const handleEdit = (user: UserProfile) => {
     setSelectedUser(user);
     setFormData({
       full_name: user.full_name || "",
       driver_number: user.driver_number || "",
       phone: user.phone || "",
-      role: (user.role as AppRole) || "support",
+      role: (user.role as AppRole) || "",
     });
   };
 
   const resetForm = () => {
-    setFormData({ full_name: "", driver_number: "", phone: "", role: "support" });
+    setFormData({ full_name: "", driver_number: "", phone: "", role: "" });
   };
 
-  // MUOKKAUS-MUTATION (Palautettu vanha logiikka)
   const updateUserMutation = useMutation({
     mutationFn: async ({ userId, data, newRole }: { userId: string; data: any; newRole: AppRole }) => {
       const { error: profileError } = await supabase
         .from("profiles")
-        .update({
-          full_name: data.full_name,
-          driver_number: data.driver_number || null,
-          phone: data.phone || null,
-        })
+        .update({ full_name: data.full_name, phone: data.phone || null })
         .eq("id", userId);
-      
       if (profileError) throw profileError;
 
       const { error: roleError } = await supabase
         .from("user_roles")
         .update({ role: newRole })
         .eq("user_id", userId);
-      
       if (roleError) throw roleError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      toast.success("Päivitetty");
+      toast.success("Tiedot päivitetty");
       setSelectedUser(null);
-      resetForm();
     },
-    onError: () => toast.error("Virhe päivityksessä"),
+    onError: (error: any) => toast.error("Virhe: " + error.message),
   });
 
   const createUserMutation = useMutation({
@@ -222,7 +204,7 @@ export default function UserManagement() {
         options: { data: { full_name: data.full_name } }
       });
       if (authError) throw authError;
-      if (!authData.user) throw new Error("Virhe");
+      if (!authData.user) throw new Error("Luonti epäonnistui");
 
       await supabase.from("user_roles").insert([{ user_id: authData.user.id, role: data.role }]);
       return authData;
@@ -231,19 +213,21 @@ export default function UserManagement() {
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       toast.success("Käyttäjä luotu");
       setIsAddUserDialogOpen(false);
+      setNewUserData({ email: "", password: "", full_name: "", role: "" });
     },
+    onError: (error: any) => toast.error(error.message),
   });
 
   const resetPasswordMutation = useMutation({
     mutationFn: async ({ userId, newPassword }: { userId: string; newPassword: string }) => {
         const email = emailMap[userId];
         const { error } = await (supabase.auth as any).resetPasswordForEmail(email, {
-            redirectTo: window.location.origin + '/auth/callback',
+            redirectTo: window.location.origin + '/paivita-salasana',
         });
         if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Palautuslinkki lähetetty");
+      toast.success("Palautuslinkki lähetetty sähköpostiin");
       setResetPasswordUserId(null);
     },
   });
@@ -271,7 +255,10 @@ export default function UserManagement() {
     return changes;
   };
 
-  const filteredUsers = users.filter((u) => u.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) || u.email?.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredUsers = users.filter((u) => 
+    u.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    u.email?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <ProtectedPage pageKey="kayttajat">
@@ -280,7 +267,7 @@ export default function UserManagement() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h1 className="text-3xl font-bold">Käyttäjien hallinta</h1>
-              <p className="text-muted-foreground mt-1">Hallitse käyttäjiä ja oikeuksia</p>
+              <p className="text-muted-foreground mt-1">Hallitse dynaamisia rooleja ja oikeuksia</p>
             </div>
             {canEdit && (
               <Dialog open={isAddUserDialogOpen} onOpenChange={setIsAddUserDialogOpen}>
@@ -290,14 +277,28 @@ export default function UserManagement() {
                 <DialogContent>
                   <DialogHeader><DialogTitle>Luo uusi käyttäjä</DialogTitle></DialogHeader>
                   <form onSubmit={(e) => { e.preventDefault(); createUserMutation.mutate(newUserData); }} className="space-y-4">
-                    <Input placeholder="Sähköposti" type="email" value={newUserData.email} onChange={e => setNewUserData({...newUserData, email: e.target.value})} required />
-                    <Input placeholder="Salasana" type="password" value={newUserData.password} onChange={e => setNewUserData({...newUserData, password: e.target.value})} required />
-                    <Input placeholder="Nimi" value={newUserData.full_name} onChange={e => setNewUserData({...newUserData, full_name: e.target.value})} required />
-                    <Select value={newUserData.role} onValueChange={v => setNewUserData({...newUserData, role: v})}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{dbRoles.map(r => <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>)}</SelectContent>
-                    </Select>
-                    <Button type="submit" className="w-full" disabled={createUserMutation.isPending}>Luo</Button>
+                    <div className="space-y-2">
+                        <Label>Sähköposti</Label>
+                        <Input type="email" value={newUserData.email} onChange={e => setNewUserData({...newUserData, email: e.target.value})} required />
+                    </div>
+                    <div className="space-y-2">
+                        <Label>Salasana</Label>
+                        <Input type="password" value={newUserData.password} onChange={e => setNewUserData({...newUserData, password: e.target.value})} required />
+                    </div>
+                    <div className="space-y-2">
+                        <Label>Nimi</Label>
+                        <Input value={newUserData.full_name} onChange={e => setNewUserData({...newUserData, full_name: e.target.value})} required />
+                    </div>
+                    <div className="space-y-2">
+                        <Label>Rooli</Label>
+                        <Select value={newUserData.role} onValueChange={v => setNewUserData({...newUserData, role: v})}>
+                        <SelectTrigger><SelectValue placeholder="Valitse rooli" /></SelectTrigger>
+                        <SelectContent>
+                            {dbRoles.map(r => <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>)}
+                        </SelectContent>
+                        </Select>
+                    </div>
+                    <Button type="submit" className="w-full" disabled={createUserMutation.isPending}>Luo käyttäjä</Button>
                   </form>
                 </DialogContent>
               </Dialog>
@@ -306,7 +307,7 @@ export default function UserManagement() {
 
           <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Hae..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
+            <Input placeholder="Hae käyttäjiä..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
           </div>
 
           <Card className="glass-card">
@@ -321,9 +322,11 @@ export default function UserManagement() {
                           <div>
                             <p className="font-medium">{user.full_name || "Ei nimeä"}</p>
                             <p className="text-sm text-muted-foreground">{user.email}</p>
+                            <Badge className={`mt-1 ${getRoleColor(user.role || "")}`}>
+                              {dbRoles.find(r => r.name === user.role)?.display_name || user.role}
+                            </Badge>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Badge className={roleColors[user.role || "support"]}>{roleLabels[user.role || "support"]}</Badge>
                             {canEdit && (
                               <>
                                 <Button variant="ghost" size="icon" onClick={() => handleEdit(user)}><Edit2 className="h-4 w-4" /></Button>
@@ -331,7 +334,7 @@ export default function UserManagement() {
                                 <AlertDialog>
                                   <AlertDialogTrigger asChild><Button variant="ghost" size="icon"><Trash2 className="h-4 w-4 text-destructive" /></Button></AlertDialogTrigger>
                                   <AlertDialogContent>
-                                    <AlertDialogHeader><AlertDialogTitle>Poista?</AlertDialogTitle></AlertDialogHeader>
+                                    <AlertDialogHeader><AlertDialogTitle>Poista käyttäjä?</AlertDialogTitle></AlertDialogHeader>
                                     <AlertDialogFooter>
                                       <AlertDialogCancel>Peruuta</AlertDialogCancel>
                                       <AlertDialogAction onClick={() => deleteUserMutation.mutate(user.id)} className="bg-destructive">Poista</AlertDialogAction>
@@ -344,7 +347,7 @@ export default function UserManagement() {
                           </div>
                         </div>
                         <CollapsibleContent className="border-t p-4 bg-muted/30">
-                          <h4 className="font-medium text-sm mb-2 flex items-center gap-2"><History className="h-4 w-4" /> Lokit</h4>
+                          <h4 className="font-medium text-sm mb-2 flex items-center gap-2"><History className="h-4 w-4" /> Viimeisimmät lokit</h4>
                           {userLogs.length === 0 ? <p className="text-xs">Ei lokeja</p> : (
                             <div className="space-y-2">
                               {userLogs.map(log => {
@@ -352,10 +355,10 @@ export default function UserManagement() {
                                 return (
                                   <div key={log.id} className="text-xs p-2 bg-background border rounded">
                                     <div className="flex justify-between mb-1">
-                                      <Badge variant="outline" className={actionColors[log.action]}>{actionLabels[log.action] || log.action}</Badge>
+                                      <span className="font-bold uppercase text-primary">{log.action}</span>
                                       <span className="text-muted-foreground">{format(new Date(log.created_at), "d.M. HH:mm")}</span>
                                     </div>
-                                    {changes.map((c, i) => <div key={i}>{c.field}: {JSON.stringify(c.oldValue)} → {JSON.stringify(c.newValue)}</div>)}
+                                    {changes.map((c, i) => <div key={i} className="mt-1">{c.field}: <span className="line-through text-destructive">{JSON.stringify(c.oldValue)}</span> → <span className="text-status-active">{JSON.stringify(c.newValue)}</span></div>)}
                                   </div>
                                 );
                               })}
@@ -371,7 +374,7 @@ export default function UserManagement() {
           </Card>
         </div>
 
-        {/* MUOKKAUS-DIALOGI (Palautettu) */}
+        {/* Muokkaus-dialogi */}
         <Dialog open={!!selectedUser} onOpenChange={(o) => !o && setSelectedUser(null)}>
           <DialogContent>
             <DialogHeader><DialogTitle>Muokkaa käyttäjää</DialogTitle></DialogHeader>
@@ -379,12 +382,17 @@ export default function UserManagement() {
               e.preventDefault();
               if (selectedUser) updateUserMutation.mutate({ userId: selectedUser.id, data: formData, newRole: formData.role });
             }} className="space-y-4">
-              <div><Label>Nimi</Label><Input value={formData.full_name} onChange={e => setFormData({...formData, full_name: e.target.value})} /></div>
-              <div>
+              <div className="space-y-2">
+                <Label>Nimi</Label>
+                <Input value={formData.full_name} onChange={e => setFormData({...formData, full_name: e.target.value})} />
+              </div>
+              <div className="space-y-2">
                 <Label>Rooli</Label>
                 <Select value={formData.role} onValueChange={v => setFormData({...formData, role: v})}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{dbRoles.map(r => <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>)}</SelectContent>
+                  <SelectContent>
+                    {dbRoles.map(r => <SelectItem key={r.name} value={r.name}>{r.display_name}</SelectItem>)}
+                  </SelectContent>
                 </Select>
               </div>
               <Button type="submit" className="w-full" disabled={updateUserMutation.isPending}>Tallenna</Button>
@@ -392,7 +400,7 @@ export default function UserManagement() {
           </DialogContent>
         </Dialog>
 
-        {/* SALASANAN VAIHTO -DIALOGI (Vanha pätkä palautettu) */}
+        {/* Salasanan vaihto -dialogi */}
         <Dialog open={!!resetPasswordUserId} onOpenChange={(o) => !o && setResetPasswordUserId(null)}>
           <DialogContent>
             <DialogHeader><DialogTitle>Vaihda salasana</DialogTitle></DialogHeader>
@@ -400,8 +408,8 @@ export default function UserManagement() {
               e.preventDefault();
               resetPasswordMutation.mutate({ userId: resetPasswordUserId!, newPassword: resetPasswordValue });
             }} className="space-y-4">
-              <Input type="password" value={resetPasswordValue} onChange={e => setResetPasswordValue(e.target.value)} placeholder="Vähintään 6 merkkiä" required />
-              <Button type="submit" className="w-full">Päivitä salasana</Button>
+              <Input type="password" value={resetPasswordValue} onChange={e => setResetPasswordValue(e.target.value)} placeholder="Uusi salasana" required />
+              <Button type="submit" className="w-full" disabled={resetPasswordMutation.isPending}>Päivitä salasana</Button>
             </form>
           </DialogContent>
         </Dialog>
