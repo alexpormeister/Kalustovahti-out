@@ -5,8 +5,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CompanySearchSelect } from "@/components/shared/CompanySearchSelect";
 import { toast } from "sonner";
@@ -95,7 +111,9 @@ export function ApiKeyManager() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) throw new Error("Ei kirjautunut sisään");
 
       const plainKey = generateApiKey();
@@ -108,7 +126,7 @@ export function ApiKeyManager() {
         label: newLabel,
         permissions: permissions as any,
         created_by: user.id,
-        company_id: (!allCompanies && newCompanyId) ? newCompanyId : null,
+        company_id: !allCompanies && newCompanyId ? newCompanyId : null,
       });
       if (error) throw error;
       return plainKey;
@@ -169,9 +187,7 @@ export function ApiKeyManager() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-sm text-muted-foreground">
-          Hallitse API-avaimia ulkoisia integraatioita varten.
-        </p>
+        <p className="text-sm text-muted-foreground">Hallitse API-avaimia ulkoisia integraatioita varten.</p>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setShowGuide(!showGuide)}>
             <BookOpen className="h-4 w-4 mr-1" /> Käyttöohje
@@ -190,24 +206,38 @@ export function ApiKeyManager() {
               <Info className="h-4 w-4 text-primary" /> API-avaimen käyttöohje
             </h4>
             <div className="space-y-2">
-              <p><strong>1. Kutsu API:a</strong> lähettämällä HTTP GET -pyyntö:</p>
+              <p>
+                <strong>1. Kutsu API:a</strong> lähettämällä HTTP GET -pyyntö:
+              </p>
               <pre className="bg-muted rounded p-2 text-xs overflow-x-auto font-mono">
-{`GET https://vbpzcyurwokjhrgkicvu.supabase.co/functions/v1/api-export
+                {`GET https://vbpzcyurwokjhrgkicvu.supabase.co/functions/v1/api-export?api_key=avain
 Headers:
   X-API-Key: sk_live_sinun_avaimesi_tähän`}
               </pre>
-              <p><strong>2. Vaihtoehtoiset tavat välittää avain:</strong></p>
+              <p>
+                <strong>2. Vaihtoehtoiset tavat välittää avain:</strong>
+              </p>
               <ul className="list-disc pl-5 space-y-1">
-                <li><code className="text-xs bg-muted px-1 rounded">Authorization: Bearer sk_live_...</code> header</li>
-                <li><code className="text-xs bg-muted px-1 rounded">?api_key=sk_live_...</code> query-parametri</li>
+                <li>
+                  <code className="text-xs bg-muted px-1 rounded">Authorization: Bearer sk_live_...</code> header
+                </li>
+                <li>
+                  <code className="text-xs bg-muted px-1 rounded">?api_key=sk_live_...</code> query-parametri
+                </li>
               </ul>
-              <p><strong>3. Vastaus:</strong> JSON joka sisältää yrityksen datan avaimen oikeuksien mukaan.</p>
-              <p><strong>Esimerkki (cURL):</strong></p>
+              <p>
+                <strong>3. Vastaus:</strong> JSON joka sisältää yrityksen datan avaimen oikeuksien mukaan.
+              </p>
+              <p>
+                <strong>Esimerkki (cURL):</strong>
+              </p>
               <pre className="bg-muted rounded p-2 text-xs overflow-x-auto font-mono">
-{`curl -H "X-API-Key: sk_live_abc123..." \\
+                {`curl -H "X-API-Key: sk_live_abc123..." \\
   https://vbpzcyurwokjhrgkicvu.supabase.co/functions/v1/api-export`}
               </pre>
-              <p className="text-muted-foreground"><strong>Huom:</strong> Virheellinen avain palauttaa <code className="text-xs">401 Unauthorized</code>.</p>
+              <p className="text-muted-foreground">
+                <strong>Huom:</strong> Virheellinen avain palauttaa <code className="text-xs">401 Unauthorized</code>.
+              </p>
             </div>
           </div>
         </CollapsibleContent>
@@ -322,9 +352,7 @@ Headers:
                     <Checkbox
                       id={`perm_${perm.key}`}
                       checked={permissions[perm.key] || false}
-                      onCheckedChange={(v) =>
-                        setPermissions((p) => ({ ...p, [perm.key]: !!v }))
-                      }
+                      onCheckedChange={(v) => setPermissions((p) => ({ ...p, [perm.key]: !!v }))}
                     />
                     <div>
                       <label htmlFor={`perm_${perm.key}`} className="text-sm font-medium leading-none">
@@ -364,11 +392,10 @@ Headers:
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Peruuta</Button>
-            <Button
-              onClick={() => createMutation.mutate()}
-              disabled={!canCreate || createMutation.isPending}
-            >
+            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+              Peruuta
+            </Button>
+            <Button onClick={() => createMutation.mutate()} disabled={!canCreate || createMutation.isPending}>
               {createMutation.isPending ? "Luodaan..." : "Luo avain"}
             </Button>
           </DialogFooter>
@@ -376,7 +403,13 @@ Headers:
       </Dialog>
 
       {/* Show Key Dialog (one time only) */}
-      <Dialog open={showKeyDialog} onOpenChange={(open) => { if (!open) setGeneratedKey(""); setShowKeyDialog(open); }}>
+      <Dialog
+        open={showKeyDialog}
+        onOpenChange={(open) => {
+          if (!open) setGeneratedKey("");
+          setShowKeyDialog(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -384,20 +417,24 @@ Headers:
               API-avain luotu
             </DialogTitle>
             <DialogDescription>
-              <strong className="text-destructive">Tärkeää:</strong> Kopioi tämä avain nyt. Sitä ei näytetä enää uudelleen.
+              <strong className="text-destructive">Tärkeää:</strong> Kopioi tämä avain nyt. Sitä ei näytetä enää
+              uudelleen.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="p-3 bg-muted rounded-md font-mono text-sm break-all select-all border">
-              {generatedKey}
-            </div>
+            <div className="p-3 bg-muted rounded-md font-mono text-sm break-all select-all border">{generatedKey}</div>
             <Button onClick={handleCopy} variant="outline" className="w-full">
               <Copy className="h-4 w-4 mr-2" />
               {copied ? "Kopioitu!" : "Kopioi leikepöydälle"}
             </Button>
           </div>
           <DialogFooter>
-            <Button onClick={() => { setShowKeyDialog(false); setGeneratedKey(""); }}>
+            <Button
+              onClick={() => {
+                setShowKeyDialog(false);
+                setGeneratedKey("");
+              }}
+            >
               Olen kopioinut avaimen
             </Button>
           </DialogFooter>
